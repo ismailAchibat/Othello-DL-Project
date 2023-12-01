@@ -56,7 +56,14 @@ class SampleManager():
 
 class CustomDataset(Dataset):
     def __init__(self,
-                 dataset_conf,load_data_once4all=False):
+                 dataset_conf,load_data_once4all=True):
+        """
+        Custom dataset class for Othello game.
+
+        Parameters:
+        - dataset_conf (dict): Configuration dictionary containing dataset parameters.
+        - load_data_once4all (bool): Flag indicating whether to load all data at once.
+        """
                  
         self.load_data_once4all=load_data_once4all
         

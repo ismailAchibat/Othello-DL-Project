@@ -102,42 +102,9 @@ def isBlackWinner(move_array,board_stat,player=-1):
     Returns:
     - bool: True if Black is the winner, False otherwise.
     """
-    move=np.where(move_array == 1)
-    move=[move[0][0],move[1][0]]
-    board_stat[move[0],move[1]]=player
-
-    for direction in MOVE_DIRS:
-        if has_tile_to_flip(move, direction,board_stat,player):
-            i = 1
-            while True:
-                row = move[0] + direction[0] * i
-                col = move[1] + direction[1] * i
-                if board_stat[row][col] == board_stat[move[0], move[1]]:
-                    break
-                else:
-                    board_stat[row][col] = board_stat[move[0], move[1]]
-                    i += 1
-    is_black_winner=sum(sum(board_stat))<0 
-    
-    return is_black_winner
-
-
-def isBlackWinner(move_array,board_stat,player=-1):
-    """
-    Check if the Black player is the winner after making a move.
-
-    Parameters:
-    - move_array (numpy.ndarray): 2D array representing the current move.
-    - board_stat (numpy.ndarray): 2D array representing the current state of the Othello board.
-    - player (int): Indicator for the current player (Black: -1 by default).
-
-    Returns:
-    - bool: True if Black is the winner, False otherwise.
-    """
     MOVE_DIRS = [(-1, -1), (-1, 0), (-1, +1),
              (0, -1),           (0, +1),
              (+1, -1), (+1, 0), (+1, +1)]
-    
     move=np.where(move_array == 1)
     move=[move[0][0],move[1][0]]
     board_stat[move[0],move[1]]=player

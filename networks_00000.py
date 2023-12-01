@@ -28,20 +28,36 @@ def loss_fnc(predictions, targets):
 
 class MLP(nn.Module):
     def __init__(self, conf):
+        """
+        Multi-Layer Perceptron (MLP) model for the Othello game.
+
+        Parameters:
+        - conf (dict): Configuration dictionary containing model parameters.
+        """
+        
         super(MLP, self).__init__()  
         
         self.board_size=conf["board_size"]
         self.path_save=conf["path_save"]+"_MLP/"
         self.earlyStopping=conf["earlyStopping"]
         self.len_inpout_seq=conf["len_inpout_seq"]
-        
+
+        # Define the layers of the MLP
         self.lin1 = nn.Linear(self.board_size*self.board_size, 128)
         self.lin2 = nn.Linear(128, 128)
         self.lin3 = nn.Linear(128, self.board_size*self.board_size)
         self.dropout = nn.Dropout(p=0.1)
         
-
     def forward(self, seq):
+        """
+        Forward pass of the MLP.
+
+        Parameters:
+        - seq (torch.Tensor): A state of board as Input.
+
+        Returns:
+        - torch.Tensor: Output probabilities after applying softmax.
+        """
         seq=np.squeeze(seq)
         if len(seq.shape)>2:
             seq=torch.flatten(seq, start_dim=1)
@@ -145,6 +161,12 @@ class MLP(nn.Module):
 
 class LSTMs(nn.Module):
     def __init__(self, conf):
+        """
+        Long Short-Term Memory (LSTM) model for the Othello game.
+
+        Parameters:
+        - conf (dict): Configuration dictionary containing model parameters.
+        """
         super(LSTMs, self).__init__()
         
         self.board_size=conf["board_size"]
@@ -153,13 +175,27 @@ class LSTMs(nn.Module):
         self.len_inpout_seq=conf["len_inpout_seq"]
         self.hidden_dim = conf["LSTM_conf"]["hidden_dim"]
 
+         # Define the layers of the LSTM model
         self.lstm = nn.LSTM(self.board_size*self.board_size, self.hidden_dim,batch_first=True)
-        self.hidden2output = nn.Linear(self.hidden_dim*2, self.board_size*self.board_size)
+        
+        #1st option: using hidden states
+        # self.hidden2output = nn.Linear(self.hidden_dim*2, self.board_size*self.board_size)
+        
+        #2nd option: using output seauence
+        self.hidden2output = nn.Linear(self.hidden_dim, self.board_size*self.board_size)
         
         self.dropout = nn.Dropout(p=0.1)
 
     def forward(self, seq):
-        
+        """
+        Forward pass of the LSTM model.
+
+        Parameters:
+        - seq (torch.Tensor): A series of borad states (history) as Input sequence.
+
+        Returns:
+        - torch.Tensor: Output probabilities after applying softmax.
+        """
         seq=np.squeeze(seq)
         if len(seq.shape)>3:
             seq=torch.flatten(seq, start_dim=2)
@@ -167,8 +203,21 @@ class LSTMs(nn.Module):
             seq=torch.flatten(seq, start_dim=1)
 
         lstm_out, (hn, cn) = self.lstm(seq)
-        outp = self.hidden2output(torch.cat((hn,cn),-1))
-        outp = F.softmax(outp, dim=1).squeeze()
+        
+        #1st option: using hidden states as below
+        # outp = self.hidden2output(torch.cat((hn,cn),-1))
+        
+        #2nd option: using output sequence as below 
+        #(lstm_out[:,-1,:] pass only last vector of output sequence)
+        if len(seq.shape)>2: # to manage the batch of sample
+            # Training phase where input is batch of seq
+            outp = self.hidden2output(lstm_out[:,-1,:])
+            outp = F.softmax(outp, dim=1).squeeze()
+        else:
+            # Prediction phase where input is a single seq
+            outp = self.hidden2output(lstm_out[-1,:])
+            outp = F.softmax(outp).squeeze()
+        
         return outp
     
     def train_all(self, train, dev, num_epoch, device, optimizer):
@@ -247,8 +296,6 @@ class LSTMs(nn.Module):
             output = self(data.float().to(device))
             predicted=output.argmax(dim=-1).cpu().clone().detach().numpy()
             target=target_array.argmax(dim=-1).numpy()
-#             import pdb
-#             pdb.set_trace()
             for i in range(len(predicted)):
                 all_predicts.append(predicted[i])
                 all_targets.append(target[i])
