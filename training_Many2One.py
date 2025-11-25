@@ -46,7 +46,7 @@ conf['epoch']=200
 conf["earlyStopping"]=20
 conf["len_inpout_seq"]=len_samples
 conf["LSTM_conf"]={}
-cconf["LSTM_conf"]["hidden_dim"]=256    # Increased hidden dimension (from 128 to 256)
+conf["LSTM_conf"]["hidden_dim"]=256    # Increased hidden dimension (from 128 to 256)
 conf["LSTM_conf"]["num_layers"]=2      # Set to 2 layers 
 conf["LSTM_conf"]["dropout_prob"]=0.3  # Set dropout probability
 

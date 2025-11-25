@@ -440,64 +440,74 @@ class LSTMs_v2(nn.Module):
     def __init__(self, conf):
         """
         Long Short-Term Memory (LSTM) model for the Othello game.
-        Optimized with multiple layers and explicit dropout.
+        Correctly optimized with multi-layer LSTM and explicit dropout.
 
         Parameters:
         - conf (dict): Configuration dictionary containing model parameters.
         """
-        super(LSTMs, self).__init__()
+        super(LSTMs_v2, self).__init__()
         
         self.board_size=conf["board_size"]
         self.path_save=conf["path_save"]+"_LSTM/"
         self.earlyStopping=conf["earlyStopping"]
         self.len_inpout_seq=conf["len_inpout_seq"]
         
-        # --- Optimized Hyperparameters ---
+        # --- Optimized Hyperparameters from config ---
         self.hidden_dim = conf["LSTM_conf"]["hidden_dim"]
-        # New parameter: Number of stacked LSTM layers (default to 2)
+        # Now safely configured to 2 in your training script
         self.num_layers = conf["LSTM_conf"].get("num_layers", 2) 
-        # New parameter: Dropout probability (default to 0.3)
-        self.dropout_prob = conf["LSTM_conf"].get("dropout_prob", 0.3) 
+        # Now safely configured to 0.3 in your training script
+        self.dropout_prob = conf["LSTM_conf"].get("dropout_prob", 0.3)
         
         # Define the layers of the LSTM model
-        # INCREASED CAPACITY with num_layers > 1 (TD4 strategy)
+        # IMPROVEMENT 1: Increase capacity with num_layers (TD4 Strategy)
+        # Using dropout=self.dropout_prob here applies dropout *between* LSTM layers, if num_layers > 1.
         self.lstm = nn.LSTM(self.board_size*self.board_size, 
                             self.hidden_dim, 
                             num_layers=self.num_layers,
-                            batch_first=True)
+                            batch_first=True,
+                            dropout=self.dropout_prob) 
         
-        # Using output sequence
+        # IMPROVEMENT 2: Explicit Dropout layer for the final output (TD4 Strategy)
+        # This is a good practice to prevent overfitting on the final output features.
+        self.dropout_out = nn.Dropout(p=self.dropout_prob)
+        
+        # Final linear layer remains the same
         self.hidden2output = nn.Linear(self.hidden_dim, self.board_size*self.board_size)
         
-        # Explicit Dropout layer (TD4 strategy)
-        self.dropout = nn.Dropout(p=self.dropout_prob)
 
     def forward(self, seq):
         """
         Forward pass of the LSTM model.
         """
+        # --- Input Preprocessing (remains unchanged) ---
         seq=torch.squeeze(seq)
         
-        # Flatten the board state at each time step
         if len(seq.shape)>3:
             seq=torch.flatten(seq, start_dim=2)
         else:
             seq=torch.flatten(seq, start_dim=1)
 
+        # LSTM forward pass
         lstm_out, (hn, cn) = self.lstm(seq)
         
+        # Process the output sequence (lstm_out) for the final prediction
         if len(seq.shape)>2:
             # Training phase: (Batch, Seq_len, Hidden_dim) -> use last timestep
             last_timestep_output = lstm_out[:,-1,:]
-            # APPLY DROPOUT to the last timestep output (TD4 strategy)
-            dropout_out = self.dropout(last_timestep_output) 
+            
+            # Apply Dropout before the final layer (TD4 Strategy)
+            dropout_out = self.dropout_out(last_timestep_output) 
+            
             outp = self.hidden2output(dropout_out)
             outp = F.softmax(outp, dim=1).squeeze()
         else:
             # Prediction phase: (Seq_len, Hidden_dim) -> use last timestep
             last_timestep_output = lstm_out[-1,:]
-            # APPLY DROPOUT (TD4 strategy)
-            dropout_out = self.dropout(last_timestep_output)
+            
+            # Apply Dropout before the final layer (TD4 Strategy)
+            dropout_out = self.dropout_out(last_timestep_output) 
+            
             outp = self.hidden2output(dropout_out)
             outp = F.softmax(outp).squeeze()
             
