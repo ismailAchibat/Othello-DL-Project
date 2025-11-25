@@ -439,59 +439,70 @@ class LSTMs(nn.Module):
 class LSTMs_v2(nn.Module):
     def __init__(self, conf):
         """
-        An improved Long Short-Term Memory (LSTM) model for the Othello game.
-        This version features a stacked 2-layer LSTM, dropout, and an enhanced output head.
-        """
-        super(LSTMs_v2, self).__init__()
-        
-        self.board_size = conf["board_size"]
-        self.path_save = conf["path_save"] + "_LSTM_v2/"
-        self.earlyStopping = conf["earlyStopping"]
-        self.len_inpout_seq = conf["len_inpout_seq"]
-        self.hidden_dim = conf["LSTM_conf"]["hidden_dim"]
-        self.num_layers = 2 # Using a 2-layer LSTM
-        self.dropout_rate = 0.2
+        Long Short-Term Memory (LSTM) model for the Othello game.
+        Optimized with multiple layers and explicit dropout.
 
-        input_size = self.board_size * self.board_size
+        Parameters:
+        - conf (dict): Configuration dictionary containing model parameters.
+        """
+        super(LSTMs, self).__init__()
         
-        self.lstm = nn.LSTM(
-            input_size, 
-            self.hidden_dim,
-            num_layers=self.num_layers,
-            batch_first=True,
-            dropout=self.dropout_rate # Apply dropout between LSTM layers
-        )
+        self.board_size=conf["board_size"]
+        self.path_save=conf["path_save"]+"_LSTM/"
+        self.earlyStopping=conf["earlyStopping"]
+        self.len_inpout_seq=conf["len_inpout_seq"]
         
-        self.output_head = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(self.hidden_dim // 2, input_size)
-        )
+        # --- Optimized Hyperparameters ---
+        self.hidden_dim = conf["LSTM_conf"]["hidden_dim"]
+        # New parameter: Number of stacked LSTM layers (default to 2)
+        self.num_layers = conf["LSTM_conf"].get("num_layers", 2) 
+        # New parameter: Dropout probability (default to 0.3)
+        self.dropout_prob = conf["LSTM_conf"].get("dropout_prob", 0.3) 
+        
+        # Define the layers of the LSTM model
+        # INCREASED CAPACITY with num_layers > 1 (TD4 strategy)
+        self.lstm = nn.LSTM(self.board_size*self.board_size, 
+                            self.hidden_dim, 
+                            num_layers=self.num_layers,
+                            batch_first=True)
+        
+        # Using output sequence
+        self.hidden2output = nn.Linear(self.hidden_dim, self.board_size*self.board_size)
+        
+        # Explicit Dropout layer (TD4 strategy)
+        self.dropout = nn.Dropout(p=self.dropout_prob)
 
     def forward(self, seq):
         """
         Forward pass of the LSTM model.
         """
-        # The input seq can be a batch of sequences or a single sequence
-        # We need to flatten the board for each time step.
-        if seq.dim() < 3: # If it's a single sequence, add a batch dimension
-            seq = seq.unsqueeze(0)
+        seq=torch.squeeze(seq)
         
-        # Flatten the board dimensions (8x8 -> 64)
-        seq = seq.view(seq.size(0), seq.size(1), -1)
+        # Flatten the board state at each time step
+        if len(seq.shape)>3:
+            seq=torch.flatten(seq, start_dim=2)
+        else:
+            seq=torch.flatten(seq, start_dim=1)
 
-        # LSTM forward pass
-        lstm_out, _ = self.lstm(seq)
+        lstm_out, (hn, cn) = self.lstm(seq)
         
-        # We only take the output from the last time step
-        last_time_step_out = lstm_out[:, -1, :]
-        
-        # Pass through the output head
-        outp = self.output_head(last_time_step_out)
-        
-        return F.softmax(outp, dim=-1).squeeze()
-
+        if len(seq.shape)>2:
+            # Training phase: (Batch, Seq_len, Hidden_dim) -> use last timestep
+            last_timestep_output = lstm_out[:,-1,:]
+            # APPLY DROPOUT to the last timestep output (TD4 strategy)
+            dropout_out = self.dropout(last_timestep_output) 
+            outp = self.hidden2output(dropout_out)
+            outp = F.softmax(outp, dim=1).squeeze()
+        else:
+            # Prediction phase: (Seq_len, Hidden_dim) -> use last timestep
+            last_timestep_output = lstm_out[-1,:]
+            # APPLY DROPOUT (TD4 strategy)
+            dropout_out = self.dropout(last_timestep_output)
+            outp = self.hidden2output(dropout_out)
+            outp = F.softmax(outp).squeeze()
+            
+        return outp
+    
     def train_all(self, train, dev, num_epoch, device, optimizer):
         if not os.path.exists(f"{self.path_save}"):
             os.mkdir(f"{self.path_save}")
