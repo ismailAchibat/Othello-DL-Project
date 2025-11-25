@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 
 from data import CustomDatasetMany
 from utile import BOARD_SIZE
-from networks_00000 import LSTMs
+from networks_2507454 import LSTMs_v2
 
 
 if torch.cuda.is_available():
@@ -48,8 +48,8 @@ conf["len_inpout_seq"]=len_samples
 conf["LSTM_conf"]={}
 conf["LSTM_conf"]["hidden_dim"]=128
 
-model = LSTMs(conf).to(device)
-opt = torch.optim.Adam(model.parameters(), lr=0.005)
+model = LSTMs_v2(conf).to(device)
+opt = torch.optim.Adam(model.parameters(), lr=0.001)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

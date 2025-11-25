@@ -1,0 +1,14 @@
+Metric,Value
+Model Parameters,"99,904"
+Training Samples,"180,030"
+Dev Samples,"30,000"
+Total Epochs,200
+,
+Initial Dev Accuracy,12.29%
+Best Dev Accuracy,27.30%
+Best Epoch,193
+Final Train Accuracy,35.42%
+Final Dev Accuracy,27.11%
+,
+Total Training Time,1244 sec (20.7 min)
+Improvement,15.01%

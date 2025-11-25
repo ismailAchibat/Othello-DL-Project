@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 
 from data import CustomDatasetOne
 from utile import BOARD_SIZE
-from networks_00000 import MLP
+from networks_2507454 import MLP_v2
 
 
 
@@ -49,7 +49,7 @@ conf["len_inpout_seq"]=len_samples
 conf["LSTM_conf"]={}
 conf["LSTM_conf"]["hidden_dim"]=128
 
-model = MLP(conf).to(device)
+model = MLP_v2(conf).to(device)
 opt = torch.optim.Adam(model.parameters(), lr=0.001)
 
 def count_parameters(model):
@@ -68,4 +68,3 @@ best_epoch=model.train_all(trainSet,
 # train_clas_rep=model.evalulate(trainSet, device)
 # acc_train=train_clas_rep["weighted avg"]["recall"]
 # print(f"Accuracy Train:{round(100*acc_train,2)}%")
-
