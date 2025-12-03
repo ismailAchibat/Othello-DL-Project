@@ -436,170 +436,193 @@ class LSTMs(nn.Module):
         return perf_rep
 
 
-class LSTMs_v2(nn.Module):
-    def __init__(self, conf):
-        """
-        Long Short-Term Memory (LSTM) model for the Othello game.
-        Correctly optimized with multi-layer LSTM and explicit dropout.
 
-        Parameters:
-        - conf (dict): Configuration dictionary containing model parameters.
-        """
+class LSTMs_v2(nn.Module):
+    """
+    More optimized version of the baseline LSTMs with minimal external changes:
+    - Bidirectional multi-layer LSTM
+    - LayerNorm after taking the last LSTM output
+    - Slightly richer output head: Dropout -> Linear -> GELU -> Linear
+    - Gradient clipping in train_all (configurable via conf)
+
+    """
+
+    def __init__(self, conf):
         super(LSTMs_v2, self).__init__()
-        
-        self.board_size=conf["board_size"]
-        self.path_save=conf["path_save"]+"_LSTM/"
-        self.earlyStopping=conf["earlyStopping"]
-        self.len_inpout_seq=conf["len_inpout_seq"]
-        
-        # --- Optimized Hyperparameters from config ---
-        self.hidden_dim = conf["LSTM_conf"]["hidden_dim"]
-        # Now safely configured to 2 in your training script
-        self.num_layers = conf["LSTM_conf"].get("num_layers", 2) 
-        # Now safely configured to 0.3 in your training script
-        self.dropout_prob = conf["LSTM_conf"].get("dropout_prob", 0.3)
-        
-        # Define the layers of the LSTM model
-        # IMPROVEMENT 1: Increase capacity with num_layers (TD4 Strategy)
-        # Using dropout=self.dropout_prob here applies dropout *between* LSTM layers, if num_layers > 1.
-        self.lstm = nn.LSTM(self.board_size*self.board_size, 
-                            self.hidden_dim, 
+
+        self.board_size = conf["board_size"]
+        self.path_save = conf["path_save"] + "_LSTMs_v2_/"
+        self.earlyStopping = conf["earlyStopping"]
+        self.len_inpout_seq = conf["len_inpout_seq"]
+
+        self.hidden_dim = conf["LSTM_conf"].get("hidden_dim", 256)
+        self.num_layers = conf["LSTM_conf"].get("num_layers", 1)
+        self.bidirectional = conf["LSTM_conf"].get("bidirectional", True)
+        self.dropout_prob = conf["LSTM_conf"].get("dropout_prob", 0.1)
+        # gradient clipping max norm
+        self.grad_clip = conf["LSTM_conf"].get("grad_clip", 1.0)
+
+        input_size = self.board_size * self.board_size
+
+        lstm_dropout = self.dropout_prob if self.num_layers > 1 else 0.0
+        self.lstm = nn.LSTM(input_size,
+                            self.hidden_dim,
                             num_layers=self.num_layers,
                             batch_first=True,
-                            dropout=self.dropout_prob) 
-        
-        # IMPROVEMENT 2: Explicit Dropout layer for the final output (TD4 Strategy)
-        # This is a good practice to prevent overfitting on the final output features.
-        self.dropout_out = nn.Dropout(p=self.dropout_prob)
-        
-        # Final linear layer remains the same
-        self.hidden2output = nn.Linear(self.hidden_dim, self.board_size*self.board_size)
-        
+                            dropout=lstm_dropout,
+                            bidirectional=self.bidirectional)
+
+        # because bidirectional doubles hidden dim in outputs, compute head size
+        lstm_output_dim = self.hidden_dim * (2 if self.bidirectional else 1)
+
+        # LayerNorm to stabilize outputs from LSTM
+        self.layer_norm = nn.LayerNorm(lstm_output_dim)
+
+        # Pre-output head (kept compact so number of params doesn't explode)
+        mid_dim = max(lstm_output_dim // 2, 32)
+        self.preoutput = nn.Sequential(
+            nn.Dropout(p=self.dropout_prob),
+            nn.Linear(lstm_output_dim, mid_dim),
+            nn.GELU()
+        )
+
+        # Keep attribute name hidden2output for compatibility
+        self.hidden2output = nn.Linear(mid_dim, self.board_size * self.board_size)
+
+        # small dropout available if needed
+        self.dropout = nn.Dropout(p=self.dropout_prob)
+
+        # initialize linear weights for slightly better convergence
+        nn.init.xavier_uniform_(self.hidden2output.weight)
+        if isinstance(self.preoutput[1], nn.Linear):
+            nn.init.xavier_uniform_(self.preoutput[1].weight)
 
     def forward(self, seq):
         """
-        Forward pass of the LSTM model.
+        Forward pass that returns probabilities (softmax) to keep the same
+        external behavior as the baseline model.
+        Accepts single sequence or batch of sequences. Works only with torch tensors.
         """
-        # --- Input Preprocessing (remains unchanged) ---
-        seq=torch.squeeze(seq)
-        
-        if len(seq.shape)>3:
-            seq=torch.flatten(seq, start_dim=2)
-        else:
-            seq=torch.flatten(seq, start_dim=1)
+        # ensure tensor and remove extra singleton dims
+        if not isinstance(seq, torch.Tensor):
+            seq = torch.as_tensor(seq)
+        seq = seq.squeeze()
 
-        # LSTM forward pass
-        lstm_out, (hn, cn) = self.lstm(seq)
-        
-        # Process the output sequence (lstm_out) for the final prediction
-        if len(seq.shape)>2:
-            # Training phase: (Batch, Seq_len, Hidden_dim) -> use last timestep
-            last_timestep_output = lstm_out[:,-1,:]
-            
-            # Apply Dropout before the final layer (TD4 Strategy)
-            dropout_out = self.dropout_out(last_timestep_output) 
-            
-            outp = self.hidden2output(dropout_out)
-            outp = F.softmax(outp, dim=1).squeeze()
+        # flatten spatial board dims into features
+        if seq.dim() > 3:
+            seq = torch.flatten(seq, start_dim=2)
         else:
-            # Prediction phase: (Seq_len, Hidden_dim) -> use last timestep
-            last_timestep_output = lstm_out[-1,:]
-            
-            # Apply Dropout before the final layer (TD4 Strategy)
-            dropout_out = self.dropout_out(last_timestep_output) 
-            
-            outp = self.hidden2output(dropout_out)
-            outp = F.softmax(outp).squeeze()
-            
-        return outp
-    
+            seq = torch.flatten(seq, start_dim=1)
+
+        # ensure batch dimension exists: (B, T, F)
+        if seq.dim() == 2:
+            seq = seq.unsqueeze(0)
+
+        lstm_out, (hn, cn) = self.lstm(seq)
+
+        # take last output vector from output sequence
+        last = lstm_out[:, -1, :]
+
+        # normalize and pass through preoutput head
+        last = self.layer_norm(last)
+        features = self.preoutput(last)
+        logits = self.hidden2output(features)
+
+        probs = F.softmax(logits, dim=1).squeeze()
+        return probs
+
     def train_all(self, train, dev, num_epoch, device, optimizer):
         if not os.path.exists(f"{self.path_save}"):
             os.mkdir(f"{self.path_save}")
         best_dev = 0.0
         dev_epoch = 0
-        notchange=0
-        train_acc_list=[]
-        dev_acc_list=[]
+        notchange = 0
+        train_acc_list = []
+        dev_acc_list = []
         torch.autograd.set_detect_anomaly(True)
-        init_time=time.time()
-        for epoch in range(1, num_epoch+1):
-            start_time=time.time()
+        init_time = time.time()
+        for epoch in range(1, num_epoch + 1):
+            start_time = time.time()
             loss = 0.0
-            nb_batch =  0
+            nb_batch = 0
             loss_batch = 0
             for batch, labels, _ in tqdm(train):
-                outputs =self(batch.float().to(device))
-                loss = loss_fnc(outputs,labels.clone().detach().float().to(device))
+                outputs = self(batch.float().to(device))
+                loss = loss_fnc(outputs, labels.clone().detach().float().to(device))
                 loss.backward()
+
+                # gradient clipping (prevents exploding gradients)
+                if self.grad_clip is not None and self.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_clip)
+
                 optimizer.step()
                 optimizer.zero_grad()
                 nb_batch += 1
                 loss_batch += loss.item()
-            print("epoch : " + str(epoch) + "/" + str(num_epoch) + ' - loss = '+\
-                  str(loss_batch/nb_batch))
-            last_training=time.time()-start_time
+            print("epoch : " + str(epoch) + "/" + str(num_epoch) + ' - loss = ' + \
+                  str(loss_batch / nb_batch))
+            last_training = time.time() - start_time
 
             self.eval()
-            
-            train_clas_rep=self.evalulate(train, device)
-            acc_train=train_clas_rep["weighted avg"]["recall"]
+
+            train_clas_rep = self.evalulate(train, device)
+            acc_train = train_clas_rep["weighted avg"]["recall"]
             train_acc_list.append(acc_train)
-            
-            dev_clas_rep=self.evalulate(dev, device)
-            acc_dev=dev_clas_rep["weighted avg"]["recall"]
+
+            dev_clas_rep = self.evalulate(dev, device)
+            acc_dev = dev_clas_rep["weighted avg"]["recall"]
             dev_acc_list.append(acc_dev)
-            
-            last_prediction=time.time()-last_training-start_time
-            
-            print(f"Accuracy Train:{round(100*acc_train,2)}%, Dev:{round(100*acc_dev,2)}% ;",
-                  f"Time:{round(time.time()-init_time)}",
+
+            last_prediction = time.time() - last_training - start_time
+
+            print(f"Accuracy Train:{round(100 * acc_train, 2)}%, Dev:{round(100 * acc_dev, 2)}% ;",
+                  f"Time:{round(time.time() - init_time)}",
                   f"(last_train:{round(last_training)}, last_pred:{round(last_prediction)})")
 
             if acc_dev > best_dev or best_dev == 0.0:
-                notchange=0
-                
+                notchange = 0
+
                 torch.save(self, self.path_save + '/model_' + str(epoch) + '.pt')
                 best_dev = acc_dev
                 best_epoch = epoch
             else:
-                notchange+=1
-                if notchange>self.earlyStopping:
+                notchange += 1
+                if notchange > self.earlyStopping:
                     break
-                
+
             self.train()
-            
-            print("*"*15,f"The best score on DEV {best_epoch} :{round(100*best_dev,3)}%")
+
+            print("*" * 15, f"The best score on DEV {best_epoch} :{round(100 * best_dev, 3)}%")
 
         self = torch.load(self.path_save + '/model_' + str(best_epoch) + '.pt', weights_only=False)
         self.eval()
         _clas_rep = self.evalulate(dev, device)
-        print(f"Recalculing the best DEV: WAcc : {100*_clas_rep['weighted avg']['recall']}%")
+        print(f"Recalculing the best DEV: WAcc : {100 * _clas_rep['weighted avg']['recall']}%")
 
-        
         return best_epoch
-    
-    
-    def evalulate(self,test_loader, device):
-        
-        all_predicts=[]
-        all_targets=[]
-        
-        for data, target_array,lengths in tqdm(test_loader):
+
+    def evalulate(self, test_loader, device):
+
+        all_predicts = []
+        all_targets = []
+
+        for data, target_array, lengths in tqdm(test_loader):
             output = self(data.float().to(device))
-            predicted=output.argmax(dim=-1).cpu().clone().detach().numpy()
-            target=target_array.argmax(dim=-1).numpy()
+            predicted = output.argmax(dim=-1).cpu().clone().detach().numpy()
+            target = target_array.argmax(dim=-1).numpy()
             for i in range(len(predicted)):
                 all_predicts.append(predicted[i])
                 all_targets.append(target[i])
-                           
-        perf_rep=classification_report(all_targets,
-                                      all_predicts,
-                                      zero_division=1,
-                                      digits=4,
-                                      output_dict=True)
-        perf_rep=classification_report(all_targets,all_predicts,zero_division=1,digits=4,output_dict=True)
-        
+
+        perf_rep = classification_report(all_targets,
+                                         all_predicts,
+                                         zero_division=1,
+                                         digits=4,
+                                         output_dict=True)
+        perf_rep = classification_report(all_targets, all_predicts, zero_division=1, digits=4, output_dict=True)
+
         return perf_rep
+
+
             
 
