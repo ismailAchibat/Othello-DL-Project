@@ -159,7 +159,7 @@ class MLP_v2(nn.Module):
         super(MLP_v2, self).__init__()  
         
         self.board_size=conf["board_size"]
-        self.path_save=conf["path_save"]+"_MLP_v2/"
+        self.path_save=conf["path_save"]+"_MLP_v2_winner_and_loser_data/"
         self.earlyStopping=conf["earlyStopping"]
         self.len_inpout_seq=conf["len_inpout_seq"]
         
@@ -451,7 +451,7 @@ class LSTMs_v2(nn.Module):
         super(LSTMs_v2, self).__init__()
 
         self.board_size = conf["board_size"]
-        self.path_save = conf["path_save"] + "_LSTMs_v2_/"
+        self.path_save = conf["path_save"] + "_LSTMs_v2_winner_and_loser_data/"
         self.earlyStopping = conf["earlyStopping"]
         self.len_inpout_seq = conf["len_inpout_seq"]
 
