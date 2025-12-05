@@ -185,19 +185,19 @@ if __name__ == "__main__":
         print(milestone_table.to_string(index=False))
         
         # Save to CSV
-        df.to_csv('results/cnn_output/training_results_full.csv', index=False)
-        summary_table.to_csv('results/cnn_output/training_summary.csv', index=False)
-        milestone_table.to_csv('results/cnn_output/training_milestones.csv', index=False)
+        df.to_csv('results/second_optimized_cnn_output/training_results_full.csv', index=False)
+        summary_table.to_csv('results/second_optimized_cnn_output/training_summary.csv', index=False)
+        milestone_table.to_csv('results/second_optimized_cnn_output/training_milestones.csv', index=False)
         
         print("\n\n💾 Files saved:")
-        print("  - results/cnn_output/training_results_full.csv")
-        print("  - results/cnn_output/training_summary.csv")
-        print("  - results/cnn_output/training_milestones.csv")
-        print("  - results/cnn_output/training_curves.png")
+        print("  - results/second_optimized_cnn_output/training_results_full.csv")
+        print("  - results/second_optimized_cnn_output/training_summary.csv")
+        print("  - results/second_optimized_cnn_output/training_milestones.csv")
+        print("  - results/second_optimized_cnn_output/training_curves.png")
         
         # Generate and save plots
         fig = plot_training_curves(df, summary)
-        fig.savefig('results/cnn_output/training_curves.png', dpi=300, bbox_inches='tight')
+        fig.savefig('results/second_optimized_cnn_output/training_curves.png', dpi=300, bbox_inches='tight')
         plt.show()
         
         print("\n✅ Report generation complete!")

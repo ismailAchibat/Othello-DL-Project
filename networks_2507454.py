@@ -775,5 +775,288 @@ class CNN(nn.Module):
         return perf_rep
 
 
+class CNN_v2(nn.Module):
+    def __init__(self, conf):
+        """
+        A second version of the CNN model with increased regularization to combat overfitting.
+        Changes:
+        - Reduced model capacity (fewer channels/neurons).
+        - Increased dropout probability.
+        - L2 regularization (weight decay) should be applied in the optimizer.
+
+        Parameters:
+        - conf (dict): Configuration dictionary containing model parameters.
+        """
+        
+        super(CNN_v2, self).__init__()  
+        
+        self.board_size = conf["board_size"]
+        self.path_save = conf["path_save"] + "_CNN_v2/"
+        self.earlyStopping = conf["earlyStopping"]
+        self.len_inpout_seq = conf["len_inpout_seq"]
+        
+        # 1. Reduce Model Capacity
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+        )
+        
+        fc_input_features = 32 * self.board_size * self.board_size
+        
+        self.fc_layers = nn.Sequential(
+            nn.Linear(fc_input_features, 128),
+            nn.ReLU(),
+            # 2. Increase Dropout
+            nn.Dropout(p=0.5),
+            nn.Linear(128, self.board_size * self.board_size)
+        )
+        
+    def forward(self, seq):
+        seq = seq.view(-1, 1, self.board_size, self.board_size)
+        x = self.conv_layers(seq)
+        x = torch.flatten(x, start_dim=1)
+        outp = self.fc_layers(x)
+        return F.softmax(outp, dim=-1)
+    
+    def train_all(self, train, dev, num_epoch, device, optimizer):
+        if not os.path.exists(f"{self.path_save}"):
+            os.makedirs(f"{self.path_save}", exist_ok=True)
+        best_dev = 0.0
+        best_epoch = 0
+        notchange=0
+        train_acc_list=[]
+        dev_acc_list=[]
+        torch.autograd.set_detect_anomaly(True)
+        init_time=time.time()
+        for epoch in range(1, num_epoch+1):
+            start_time=time.time()
+            loss = 0.0
+            nb_batch =  0
+            loss_batch = 0
+            self.train()
+            for batch, labels, _ in tqdm(train):
+                outputs =self(batch.float().to(device))
+                loss = loss_fnc(outputs,labels.clone().detach().float().to(device))
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                nb_batch += 1
+                loss_batch += loss.item()
+            print("epoch : " + str(epoch) + "/" + str(num_epoch) + ' - loss = '+\
+                  str(loss_batch/nb_batch))
+            last_training=time.time()-start_time
+
+            self.eval()
+            
+            train_clas_rep=self.evalulate(train, device)
+            acc_train=train_clas_rep["weighted avg"]["recall"]
+            train_acc_list.append(acc_train)
+            
+            dev_clas_rep=self.evalulate(dev, device)
+            acc_dev=dev_clas_rep["weighted avg"]["recall"]
+            dev_acc_list.append(acc_dev)
+            
+            last_prediction=time.time()-last_training-start_time
+            
+            print(f"Accuracy Train:{round(100*acc_train,2)}%, Dev:{round(100*acc_dev,2)}% ;",
+                  f"Time:{round(time.time()-init_time)}",
+                  f"(last_train:{round(last_training)}sec, last_pred:{round(last_prediction)}sec)")
+
+            if acc_dev > best_dev or best_dev == 0.0:
+                notchange=0
+                
+                torch.save(self, self.path_save + '/model_' + str(epoch) + '.pt')
+                best_dev = acc_dev
+                best_epoch = epoch
+            else:
+                notchange+=1
+                if notchange>self.earlyStopping:
+                    break
+            
+            self.train()
+            
+            print("*"*15,f"The best score on DEV {best_epoch} :{round(100*best_dev,3)}%")
+
+        if best_epoch > 0:
+            self = torch.load(self.path_save + '/model_' + str(best_epoch) + '.pt',weights_only=False)
+            self.eval()
+            _clas_rep = self.evalulate(dev, device)
+            print(f"Recalculing the best DEV: WAcc : {100*_clas_rep['weighted avg']['recall']}%")
+        
+        return best_epoch
+    
+    
+    def evalulate(self,test_loader, device):
+        
+        all_predicts=[]
+        all_targets=[]
+        self.eval()
+        with torch.no_grad():
+            for data, target,_ in tqdm(test_loader):
+                output = self(data.float().to(device))
+                predicted=output.argmax(dim=-1).cpu().detach().numpy()
+                target=target.argmax(dim=-1).numpy()
+                for i in range(len(predicted)):
+                    all_predicts.append(predicted[i])
+                    all_targets.append(target[i])
+                           
+        perf_rep=classification_report(all_targets,
+                                      all_predicts,
+                                      zero_division=1,
+                                      digits=4,
+                                      output_dict=True)
+        perf_rep=classification_report(all_targets,all_predicts,zero_division=1,digits=4,output_dict=True)
+        
+        return perf_rep
+
+
+class CNN_v3(nn.Module):
+    def __init__(self, conf):
+        """
+        A third version of the CNN model, balancing capacity and regularization.
+        Changes from v2:
+        - Increased model capacity to find a middle ground.
+        - Adjusted dropout to a less aggressive value.
+
+        Parameters:
+        - conf (dict): Configuration dictionary containing model parameters.
+        """
+        
+        super(CNN_v3, self).__init__()  
+        
+        self.board_size = conf["board_size"]
+        self.path_save = conf["path_save"] + "_CNN_v3/"
+        self.earlyStopping = conf["earlyStopping"]
+        self.len_inpout_seq = conf["len_inpout_seq"]
+        
+        # 1. Increase Model Capacity (middle ground between v1 and v2)
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(1, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+        )
+        
+        fc_input_features = 64 * self.board_size * self.board_size
+        
+        self.fc_layers = nn.Sequential(
+            nn.Linear(fc_input_features, 192),
+            nn.ReLU(),
+            # 2. Adjust Dropout
+            nn.Dropout(p=0.4),
+            nn.Linear(192, self.board_size * self.board_size)
+        )
+        
+    def forward(self, seq):
+        seq = seq.view(-1, 1, self.board_size, self.board_size)
+        x = self.conv_layers(seq)
+        x = torch.flatten(x, start_dim=1)
+        outp = self.fc_layers(x)
+        return F.softmax(outp, dim=-1)
+    
+    def train_all(self, train, dev, num_epoch, device, optimizer):
+        if not os.path.exists(f"{self.path_save}"):
+            os.makedirs(f"{self.path_save}", exist_ok=True)
+        best_dev = 0.0
+        best_epoch = 0
+        notchange=0
+        train_acc_list=[]
+        dev_acc_list=[]
+        torch.autograd.set_detect_anomaly(True)
+        init_time=time.time()
+        for epoch in range(1, num_epoch+1):
+            start_time=time.time()
+            loss = 0.0
+            nb_batch =  0
+            loss_batch = 0
+            self.train()
+            for batch, labels, _ in tqdm(train):
+                outputs =self(batch.float().to(device))
+                loss = loss_fnc(outputs,labels.clone().detach().float().to(device))
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                nb_batch += 1
+                loss_batch += loss.item()
+            print("epoch : " + str(epoch) + "/" + str(num_epoch) + ' - loss = '+\
+                  str(loss_batch/nb_batch))
+            last_training=time.time()-start_time
+
+            self.eval()
+            
+            train_clas_rep=self.evalulate(train, device)
+            acc_train=train_clas_rep["weighted avg"]["recall"]
+            train_acc_list.append(acc_train)
+            
+            dev_clas_rep=self.evalulate(dev, device)
+            acc_dev=dev_clas_rep["weighted avg"]["recall"]
+            dev_acc_list.append(acc_dev)
+            
+            last_prediction=time.time()-last_training-start_time
+            
+            print(f"Accuracy Train:{round(100*acc_train,2)}%, Dev:{round(100*acc_dev,2)}% ;",
+                  f"Time:{round(time.time()-init_time)}",
+                  f"(last_train:{round(last_training)}sec, last_pred:{round(last_prediction)}sec)")
+
+            if acc_dev > best_dev or best_dev == 0.0:
+                notchange=0
+                
+                torch.save(self, self.path_save + '/model_' + str(epoch) + '.pt')
+                best_dev = acc_dev
+                best_epoch = epoch
+            else:
+                notchange+=1
+                if notchange>self.earlyStopping:
+                    break
+            
+            self.train()
+            
+            print("*"*15,f"The best score on DEV {best_epoch} :{round(100*best_dev,3)}%")
+
+        if best_epoch > 0:
+            self = torch.load(self.path_save + '/model_' + str(best_epoch) + '.pt',weights_only=False)
+            self.eval()
+            _clas_rep = self.evalulate(dev, device)
+            print(f"Recalculing the best DEV: WAcc : {100*_clas_rep['weighted avg']['recall']}%")
+        
+        return best_epoch
+    
+    
+    def evalulate(self,test_loader, device):
+        
+        all_predicts=[]
+        all_targets=[]
+        self.eval()
+        with torch.no_grad():
+            for data, target,_ in tqdm(test_loader):
+                output = self(data.float().to(device))
+                predicted=output.argmax(dim=-1).cpu().detach().numpy()
+                target=target.argmax(dim=-1).numpy()
+                for i in range(len(predicted)):
+                    all_predicts.append(predicted[i])
+                    all_targets.append(target[i])
+                           
+        perf_rep=classification_report(all_targets,
+                                      all_predicts,
+                                      zero_division=1,
+                                      digits=4,
+                                      output_dict=True)
+        perf_rep=classification_report(all_targets,all_predicts,zero_division=1,digits=4,output_dict=True)
+        
+        return perf_rep
+
+
             
 
