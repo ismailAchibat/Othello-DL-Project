@@ -1058,5 +1058,173 @@ class CNN_v3(nn.Module):
         return perf_rep
 
 
+class CNN_LSTM(nn.Module):
+    def __init__(self, conf):
+        """
+        An optimize CNN-LSTM model.
+        Changes:
+        - Reduced complexity (fewer LSTM layers and smaller hidden dim).
+        - Added gradient clipping in the training loop.
+        """
+        super(CNN_LSTM, self).__init__()
+        
+        self.board_size = conf["board_size"]
+        self.path_save = conf["path_save"] + "_CNN_LSTM/"
+        self.earlyStopping = conf["earlyStopping"]
+        self.len_inpout_seq = conf["len_inpout_seq"]
+        self.grad_clip = conf.get("grad_clip", 1.0)
+
+        # CNN Feature Extractor (using a lighter, v2-like architecture)
+        self.cnn_encoder = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+        )
+        
+        cnn_output_features = 32 * self.board_size * self.board_size
+        lstm_input_size = 256
+
+        self.cnn_head = nn.Linear(cnn_output_features, lstm_input_size)
+        
+        # Reduced-complexity LSTM Layer
+        self.lstm_hidden_size = conf["LSTM_conf"].get("hidden_dim", 256)
+        self.lstm_num_layers = conf["LSTM_conf"].get("num_layers", 1)
+        self.lstm_bidirectional = conf["LSTM_conf"].get("bidirectional", True)
+
+        self.lstm = nn.LSTM(
+            input_size=lstm_input_size,
+            hidden_size=self.lstm_hidden_size,
+            num_layers=self.lstm_num_layers,
+            batch_first=True,
+            bidirectional=self.lstm_bidirectional,
+        )
+        
+        # Classifier Head
+        lstm_output_dim = self.lstm_hidden_size * (2 if self.lstm_bidirectional else 1)
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(lstm_output_dim),
+            nn.Dropout(p=0.4),
+            nn.Linear(lstm_output_dim, self.board_size * self.board_size)
+        )
+
+    def forward(self, seq):
+        # Handle different input shapes from training vs. inference
+        if seq.dim() == 3: # Shape is likely [B, S, 64] from game.py
+            seq = seq.view(seq.shape[0], seq.shape[1], self.board_size, self.board_size)
+        elif seq.dim() != 4: # Expected shape is [B, S, 8, 8] from dataloader
+            raise ValueError(f"Expected a 4D or 3D tensor, but got shape {seq.shape}")
+
+        batch_size, seq_len, height, width = seq.shape
+        
+        # Reshape for CNN processing: (B, S, 8, 8) -> (B * S, 1, 8, 8)
+        cnn_input = seq.view(batch_size * seq_len, 1, height, width).float()
+        
+        # Pass through CNN encoder
+        cnn_out = self.cnn_encoder(cnn_input)
+        cnn_out = torch.flatten(cnn_out, start_dim=1)
+        cnn_embeddings = F.relu(self.cnn_head(cnn_out))
+        
+        # Reshape back for LSTM: (B * S, lstm_input_size) -> (B, S, lstm_input_size)
+        lstm_input = cnn_embeddings.view(batch_size, seq_len, -1)
+        
+        # Pass through LSTM
+        lstm_out, _ = self.lstm(lstm_input)
+        
+        # We only care about the output of the last timestep
+        last_step_output = lstm_out[:, -1, :]
+        
+        # Classify the last timestep's output
+        logits = self.classifier(last_step_output)
+        
+        return F.softmax(logits, dim=-1)
+
+    def train_all(self, train, dev, num_epoch, device, optimizer):
+        if not os.path.exists(f"{self.path_save}"):
+            os.makedirs(f"{self.path_save}", exist_ok=True)
+        best_dev = 0.0
+        best_epoch = 0
+        notchange = 0
+        torch.autograd.set_detect_anomaly(True)
+        init_time = time.time()
+        for epoch in range(1, num_epoch + 1):
+            start_time = time.time()
+            loss_batch = 0
+            nb_batch = 0
+            self.train()
+            for batch, labels, _ in tqdm(train):
+                outputs = self(batch.to(device))
+                loss = loss_fnc(outputs, labels.clone().detach().float().to(device))
+                loss.backward()
+
+                if self.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_clip)
+
+                optimizer.step()
+                optimizer.zero_grad()
+                nb_batch += 1
+                loss_batch += loss.item()
+            
+            print("epoch : " + str(epoch) + "/" + str(num_epoch) + ' - loss = ' + str(loss_batch / nb_batch))
+            last_training = time.time() - start_time
+
+            self.eval()
+            train_clas_rep = self.evalulate(train, device)
+            acc_train = train_clas_rep["weighted avg"]["recall"]
+            
+            dev_clas_rep = self.evalulate(dev, device)
+            acc_dev = dev_clas_rep["weighted avg"]["recall"]
+            
+            last_prediction = time.time() - last_training - start_time
+            
+            print(f"Accuracy Train:{round(100*acc_train,2)}%, Dev:{round(100*acc_dev,2)}% ;",
+                  f"Time:{round(time.time()-init_time)}",
+                  f"(last_train:{round(last_training)}sec, last_pred:{round(last_prediction)}sec)")
+
+            if acc_dev > best_dev or best_dev == 0.0:
+                notchange = 0
+                torch.save(self, self.path_save + '/model_' + str(epoch) + '.pt')
+                best_dev = acc_dev
+                best_epoch = epoch
+            else:
+                notchange += 1
+                if notchange > self.earlyStopping:
+                    break
+            
+            print("*"*15,f"The best score on DEV {best_epoch} :{round(100*best_dev,3)}%")
+
+        if best_epoch > 0:
+            self = torch.load(self.path_save + '/model_' + str(best_epoch) + '.pt', weights_only=False)
+            self.eval()
+            _clas_rep = self.evalulate(dev, device)
+            print(f"Recalculing the best DEV: WAcc : {100*_clas_rep['weighted avg']['recall']}%")
+        
+        return best_epoch
+
+    def evalulate(self, test_loader, device):
+        all_predicts = []
+        all_targets = []
+        self.eval()
+        with torch.no_grad():
+            for data, target_array, lengths in tqdm(test_loader):
+                output = self(data.to(device))
+                predicted = output.argmax(dim=-1).cpu().clone().detach().numpy()
+                target = target_array.argmax(dim=-1).numpy()
+                for i in range(len(predicted)):
+                    all_predicts.append(predicted[i])
+                    all_targets.append(target[i])
+                           
+        perf_rep = classification_report(all_targets,
+                                         all_predicts,
+                                         zero_division=1,
+                                         digits=4,
+                                         output_dict=True)
+        perf_rep = classification_report(all_targets, all_predicts, zero_division=1, digits=4, output_dict=True)
+        
+        return perf_rep
+
+
             
 
