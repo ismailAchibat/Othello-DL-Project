@@ -38,7 +38,7 @@ def main(args):
 
     conf = {}
     conf["board_size"] = BOARD_SIZE
-    conf["path_save"] = f"save_models_CNN_v3"
+    conf["path_save"] = f"save_models_CNN_v3_more_data"
     conf['epoch'] = args.num_epochs
     conf["earlyStopping"] = 20
     conf["len_inpout_seq"] = len_samples

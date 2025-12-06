@@ -151,9 +151,6 @@ class MLP_v2(nn.Module):
         """
         An improved Multi-Layer Perceptron (MLP) model for the Othello game.
         This version includes ReLU activations and Batch Normalization.
-
-        Parameters:
-        - conf (dict): Configuration dictionary containing model parameters.
         """
         
         super(MLP_v2, self).__init__()  
@@ -165,7 +162,7 @@ class MLP_v2(nn.Module):
         
         input_size = self.board_size*self.board_size
 
-        # Define the layers of the MLP
+        # the layers of the MLP
         self.layers = nn.Sequential(
             nn.Linear(input_size, 256),
             nn.BatchNorm1d(256),
@@ -439,7 +436,7 @@ class LSTMs(nn.Module):
 
 class LSTMs_v2(nn.Module):
     """
-    More optimized version of the baseline LSTMs with minimal external changes:
+    More optimized version of the baseline LSTMs:
     - Bidirectional multi-layer LSTM
     - LayerNorm after taking the last LSTM output
     - Slightly richer output head: Dropout -> Linear -> GELU -> Linear
@@ -653,7 +650,6 @@ class CNN(nn.Module):
             nn.ReLU(),
         )
         
-        # Adjust the input features of the linear layer based on the output of conv layers
         # For a 8x8 input, the output size of conv layers will also be 8x8 due to padding=1
         self.fc_layers = nn.Sequential(
             nn.Linear(64 * self.board_size * self.board_size, 256),
@@ -1061,10 +1057,7 @@ class CNN_v3(nn.Module):
 class CNN_LSTM(nn.Module):
     def __init__(self, conf):
         """
-        An optimize CNN-LSTM model.
-        Changes:
-        - Reduced complexity (fewer LSTM layers and smaller hidden dim).
-        - Added gradient clipping in the training loop.
+        A CNN-LSTM model.
         """
         super(CNN_LSTM, self).__init__()
         
@@ -1089,7 +1082,6 @@ class CNN_LSTM(nn.Module):
 
         self.cnn_head = nn.Linear(cnn_output_features, lstm_input_size)
         
-        # Reduced-complexity LSTM Layer
         self.lstm_hidden_size = conf["LSTM_conf"].get("hidden_dim", 256)
         self.lstm_num_layers = conf["LSTM_conf"].get("num_layers", 1)
         self.lstm_bidirectional = conf["LSTM_conf"].get("bidirectional", True)
@@ -1119,7 +1111,6 @@ class CNN_LSTM(nn.Module):
 
         batch_size, seq_len, height, width = seq.shape
         
-        # Reshape for CNN processing: (B, S, 8, 8) -> (B * S, 1, 8, 8)
         cnn_input = seq.view(batch_size * seq_len, 1, height, width).float()
         
         # Pass through CNN encoder
@@ -1127,16 +1118,13 @@ class CNN_LSTM(nn.Module):
         cnn_out = torch.flatten(cnn_out, start_dim=1)
         cnn_embeddings = F.relu(self.cnn_head(cnn_out))
         
-        # Reshape back for LSTM: (B * S, lstm_input_size) -> (B, S, lstm_input_size)
         lstm_input = cnn_embeddings.view(batch_size, seq_len, -1)
         
         # Pass through LSTM
         lstm_out, _ = self.lstm(lstm_input)
         
-        # We only care about the output of the last timestep
         last_step_output = lstm_out[:, -1, :]
         
-        # Classify the last timestep's output
         logits = self.classifier(last_step_output)
         
         return F.softmax(logits, dim=-1)
